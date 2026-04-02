@@ -5,6 +5,9 @@ from datetime import datetime
 from typing import Any
 
 
+DEFAULT_FILL_PRIORITY = 100
+
+
 def now_text() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -23,6 +26,14 @@ def normalize_timestamp(value: Any) -> int | None:
     return timestamp
 
 
+def normalize_fill_priority(value: Any) -> int:
+    try:
+        priority = int(str(value).strip())
+    except (AttributeError, TypeError, ValueError):
+        return DEFAULT_FILL_PRIORITY
+    return max(0, priority)
+
+
 @dataclass(slots=True)
 class Account:
     id: str
@@ -30,6 +41,7 @@ class Account:
     access_token: str
     refresh_token: str
     utdid: str
+    fill_priority: int = DEFAULT_FILL_PRIORITY
     expires_at: int | None = None
     cookie: str | None = None
     manual_enabled: bool = True
@@ -49,6 +61,7 @@ class Account:
             access_token=str(data.get("accessToken") or ""),
             refresh_token=str(data.get("refreshToken") or ""),
             utdid=str(data.get("utdid") or ""),
+            fill_priority=normalize_fill_priority(data.get("fillPriority")),
             expires_at=normalize_timestamp(data.get("expiresAt")),
             cookie=data.get("cookie"),
             manual_enabled=bool(data.get("manualEnabled", data.get("enabled", True))),
@@ -68,6 +81,7 @@ class Account:
             "accessToken": self.access_token,
             "refreshToken": self.refresh_token,
             "utdid": self.utdid,
+            "fillPriority": self.fill_priority,
             "expiresAt": self.expires_at,
             "cookie": self.cookie,
             "manualEnabled": self.manual_enabled,

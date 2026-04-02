@@ -289,6 +289,34 @@ def update_usage_summary(
                 )
         return
 
+    if event_name == "content_block_start":
+        block = event_payload.get("content_block")
+        if not isinstance(block, dict):
+            return
+        summary["content_blocks"] = int(summary.get("content_blocks") or 0) + 1
+        block_type = str(block.get("type") or "")
+        if block_type == "tool_use":
+            summary["tool_use_blocks"] = int(summary.get("tool_use_blocks") or 0) + 1
+        return
+
+    if event_name == "content_block_delta":
+        delta = event_payload.get("delta")
+        if not isinstance(delta, dict):
+            return
+        if delta.get("text") is not None:
+            summary["text_chars"] = int(summary.get("text_chars") or 0) + len(
+                str(delta.get("text") or "")
+            )
+        if delta.get("thinking") is not None:
+            summary["thinking_chars"] = int(summary.get("thinking_chars") or 0) + len(
+                str(delta.get("thinking") or "")
+            )
+        if delta.get("partial_json") is not None:
+            summary["tool_json_chars"] = int(summary.get("tool_json_chars") or 0) + len(
+                str(delta.get("partial_json") or "")
+            )
+        return
+
     if event_name != "message_delta":
         return
 
@@ -359,6 +387,11 @@ def iter_anthropic_sse_bytes(
         "model": model,
         "usage": _usage_summary(),
         "stop_reason": "end_turn",
+        "content_blocks": 0,
+        "text_chars": 0,
+        "thinking_chars": 0,
+        "tool_use_blocks": 0,
+        "tool_json_chars": 0,
     }
     completed = False
     try:
@@ -386,6 +419,11 @@ def decode_non_stream_response(
         "model": model,
         "usage": _usage_summary(),
         "stop_reason": "end_turn",
+        "content_blocks": 0,
+        "text_chars": 0,
+        "thinking_chars": 0,
+        "tool_use_blocks": 0,
+        "tool_json_chars": 0,
     }
 
     for event_name, event_payload in events:

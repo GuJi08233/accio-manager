@@ -668,6 +668,7 @@
         <a class="switch-link {% if current_view == 'accounts' %}active{% endif %}" href="/dashboard?view=accounts&page=1&pageSize={{ page_size }}">账号列表</a>
         <a class="switch-link {% if current_view == 'settings' %}active{% endif %}" href="/dashboard?view=settings&page=1&pageSize={{ page_size }}">配置中心</a>
         <a class="switch-link {% if current_view == 'stats' %}active{% endif %}" href="/dashboard?view=stats&page=1&pageSize={{ page_size }}">统计界面</a>
+        <a class="switch-link {% if current_view == 'logs' %}active{% endif %}" href="/dashboard?view=logs&page=1&pageSize={{ page_size }}">日志界面</a>
       </div>
     </section>
 
@@ -678,12 +679,60 @@
       <a class="link-button secondary" href="/dashboard?view=settings&page=1&pageSize={{ page_size }}">配置中心</a>
       <a class="link-button secondary" href="/dashboard?view=accounts&page={{ current_page }}&pageSize={{ page_size }}">账号区域</a>
       <a class="link-button secondary" href="/dashboard?view=stats&page=1&pageSize={{ page_size }}">统计界面</a>
+      <a class="link-button secondary" href="/dashboard?view=logs&page=1&pageSize={{ page_size }}">日志界面</a>
       <button class="button secondary" type="button" onclick="logoutAdmin()">退出登录</button>
       <a class="link-button secondary" href="/dashboard?view={{ current_view }}&page={{ current_page }}&pageSize={{ page_size }}">刷新面板</a>
     </section>
 
     <section class="panel">
-      {% if current_view == "stats" %}
+      {% if current_view == "logs" %}
+      <div class="stats-section">
+        <div class="stats-section-title">最近 200 条 API 日志</div>
+        {% if api_logs %}
+        <div class="stats-table-wrap">
+          <table class="stats-table">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>账号</th>
+                <th>模型</th>
+                <th>模式</th>
+                <th>结果</th>
+                <th>空回复</th>
+                <th>Tokens</th>
+                <th>耗时</th>
+                <th>说明</th>
+                <th>详情</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in api_logs %}
+              <tr>
+                <td>{{ item.createdAt }}</td>
+                <td>{{ item.accountName }}</td>
+                <td>{{ item.model }}</td>
+                <td>{{ "流式" if item.stream else "非流式" }}</td>
+                <td>{{ "成功" if item.success else "失败" }}</td>
+                <td>{{ "是" if item.emptyResponse else "否" }}</td>
+                <td>{{ item.inputTokens }} / {{ item.outputTokens }}</td>
+                <td>{{ item.durationMs }}ms</td>
+                <td>{{ item.message }}</td>
+                <td>
+                  <details>
+                    <summary>查看</summary>
+                    <pre style="white-space: pre-wrap; word-break: break-word;">{{ item.detailJson }}</pre>
+                  </details>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty">还没有任何 `/v1/messages` 日志。</div>
+        {% endif %}
+      </div>
+      {% elif current_view == "stats" %}
       <div class="summary-grid">
         <div class="summary-card">
           <div class="summary-label">总调用次数</div>
@@ -807,7 +856,7 @@
               <option value="fill" {% if api_account_strategy == "fill" %}selected{% endif %}>优先填充</option>
               <option value="round_robin" {% if api_account_strategy == "round_robin" %}selected{% endif %}>轮询</option>
             </select>
-            <div class="meta" style="margin-top:8px;">优先填充会持续使用顺序靠前的可用账号，额度用完再切到下一个；轮询会在可用账号之间轮转。</div>
+            <div class="meta" style="margin-top:8px;">优先填充会先按账号优先级排序，数值越小越优先；同优先级下会优先调用剩余额度更少的账号。轮询会在可用账号之间轮转。</div>
           </div>
           <label class="check-row">
             <input id="settings-auto-disable" type="checkbox" {% if auto_disable_on_empty_quota %}checked{% endif %}>
@@ -870,11 +919,13 @@
               <div class="account-head">
                 <div class="account-name" id="account-name-{{ account.id }}">{{ account.name }}</div>
                 <button class="mini-action" type="button" onclick='renameAccount({{ account.id|tojson }}, {{ account.name|tojson }})'>重命名</button>
+                <button class="mini-action" type="button" onclick='updateFillPriority({{ account.id|tojson }}, {{ account.fill_priority|tojson }}, {{ account.name|tojson }})'>优先级</button>
               </div>
               <div class="status-chip {{ account.status.level }}" id="status-chip-{{ account.id }}">
                 {{ account.status.label }}
               </div>
               <div class="meta" id="status-hint-{{ account.id }}">{{ account.status.hint }}</div>
+              <div class="meta" id="account-priority-{{ account.id }}">优先级: {{ account.fill_priority }}</div>
               <div class="meta">UTDID: {{ account.utdid }}</div>
               <div class="meta">新增: {{ account.added_at }}</div>
               <div class="meta" id="account-updated-{{ account.id }}">更新: {{ account.updated_at }}</div>
@@ -1171,6 +1222,7 @@
 
         const items = [
           ['账号名', account.name],
+          ['优先级', account.fillPriority],
           ['UTDID', account.utdid],
           ['Access Token', account.accessToken],
           ['Refresh Token', account.refreshToken],
@@ -1238,6 +1290,37 @@
       } catch (error) {
         console.error(error);
         showToast('保存配置失败，请稍后重试');
+      }
+    }
+
+    async function updateFillPriority(accountId, currentPriority, accountName) {
+      const rawValue = window.prompt(`设置 ${accountName} 的优先级\n数字越小越优先，同优先级会优先调用剩余额度更少的账号。`, String(currentPriority ?? 100));
+      if (rawValue === null) {
+        return;
+      }
+
+      const fillPriority = Number.parseInt(String(rawValue).trim(), 10);
+      if (!Number.isInteger(fillPriority) || fillPriority < 0) {
+        showToast('优先级必须是大于等于 0 的整数');
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/accounts/${accountId}/priority`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ fillPriority })
+        });
+        const payload = await response.json();
+        showToast(payload.message || '优先级已更新');
+        if (payload.success) {
+          window.setTimeout(() => window.location.reload(), 350);
+        }
+      } catch (error) {
+        console.error(error);
+        showToast(`更新 ${accountName} 优先级失败`);
       }
     }
 

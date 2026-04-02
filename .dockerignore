@@ -20,5 +20,6 @@ wheels/
 !.env.example
 
 data/*.json
+data/*.jsonl
 !data/*.example.json
 data/accounts/*.json

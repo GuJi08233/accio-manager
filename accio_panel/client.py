@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from typing import Any
 from urllib.parse import urlencode
 
@@ -70,11 +71,11 @@ class AccioClient:
             "message": "" if response.ok else f"HTTP {response.status_code}",
         }
 
-    def build_login_url(self, callback_url: str) -> str:
+    def build_login_url(self, callback_url: str, *, state: str | None = None) -> str:
         query = urlencode(
             {
                 "return_url": callback_url,
-                "state": "accio-panel",
+                "state": state or secrets.token_hex(32),
             }
         )
         return f"https://www.accio.com/login?{query}"

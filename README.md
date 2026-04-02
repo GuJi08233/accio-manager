@@ -15,8 +15,10 @@
 - 单后台调度器按账号下次检查时间自动巡检额度
 - Anthropic 兼容 API：`/v1/models`、`/v1/messages`
 - 多账号 API 调度策略：优先填充 / 轮询
+- 支持为每个账号设置优先填充优先级
 - 支持全局上游代理：HTTP / HTTPS / SOCKS4 / SOCKS5
 - 内置统计界面：模型调用次数、输入 / 输出 Tokens、账号维度统计
+- 内置日志界面：记录 `/v1/messages` 的账号选择、上游错误与空回复
 
 ## 启动
 
@@ -39,6 +41,7 @@ uv run python main.py
 - `http://127.0.0.1:4097/login`
 - `http://127.0.0.1:4097/v1/models`
 - `http://127.0.0.1:4097/v1/messages`
+- `http://127.0.0.1:4097/dashboard?view=logs`
 
 ## Docker
 
@@ -102,7 +105,8 @@ Anthropic 兼容 API 调用时：
 - `/v1/models` 和 `/v1/messages` 都需要这个鉴权
 - 目前仅支持模型：`claude-sonnet-4-6`、`claude-opus-4-6`
 - 其他模型会直接返回错误
-- 默认调度策略是 `优先填充`，会优先使用顺序靠前且有额度的账号
+- 默认调度策略是 `优先填充`
+- 优先填充支持账号级 `fillPriority`，数值越小越优先；同优先级下会优先调用剩余额度更少的账号
 - 可在面板配置区设置全局上游代理，例如：
   `http://127.0.0.1:7890`、`https://127.0.0.1:7890`、`socks5://127.0.0.1:1080`、`socks5h://127.0.0.1:1080`
 - 代理只影响服务端访问 Accio 网关，不影响浏览器登录页
@@ -131,6 +135,7 @@ data/
 
 - `config.json`：全局配置、管理员密码、会话密钥
 - `stats.json`：`/v1/messages` 的累计调用统计
+- `api-logs.jsonl`：`/v1/messages` 的逐条调用日志
 - `accounts/*.json`：每个账号单独一个文件
 - `accio-accounts.json`：旧版单文件账号列表，首次启动会自动迁移到 `accounts/` 目录
 - 面板支持导入单账号 JSON，也支持直接导入旧版 `accio-accounts.json` 数组文件

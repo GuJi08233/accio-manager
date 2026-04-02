@@ -23,5 +23,6 @@ htmlcov/
 
 # Local runtime data and secrets
 data/*.json
+data/*.jsonl
 !data/*.example.json
 data/accounts/*.json

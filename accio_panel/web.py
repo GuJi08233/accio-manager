@@ -24,6 +24,7 @@ from fastapi.responses import (
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
+from .api_logs import ApiLogStore
 from .app_settings import (
     PanelSettings,
     PanelSettingsStore,
@@ -154,6 +155,15 @@ def _api_account_strategy_label(strategy: str) -> str:
     return "轮询" if strategy == "round_robin" else "优先填充"
 
 
+def _proxy_fill_sort_key(account: Account, quota: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        account.fill_priority,
+        quota["remaining_value"],
+        account.name,
+        account.id,
+    )
+
+
 def _account_status_view(account: Account) -> dict[str, Any]:
     if not account.manual_enabled:
         return {
@@ -274,6 +284,7 @@ def _select_proxy_account(
     if not candidates:
         raise ProxySelectionError(503, "当前没有已启用的账号可供 API 调用。")
 
+    errors: list[str] = []
     strategy = panel_settings.api_account_strategy
     if strategy == "round_robin":
         start_index = application.state.proxy_round_robin_index % len(candidates)
@@ -282,9 +293,58 @@ def _select_proxy_account(
             for offset in range(len(candidates))
         ]
     else:
-        index_order = list(range(len(candidates)))
+        results: list[tuple[Account, dict[str, Any]]] = []
+        workers = min(8, len(candidates))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_map = {
+                executor.submit(
+                    _check_proxy_candidate,
+                    store,
+                    client,
+                    panel_settings,
+                    candidate,
+                ): candidate.id
+                for candidate in candidates
+            }
+            for future in as_completed(future_map):
+                try:
+                    results.append(future.result())
+                except Exception as exc:  # pragma: no cover
+                    errors.append(str(exc))
 
-    errors: list[str] = []
+        available = [
+            (account, quota)
+            for account, quota in results
+            if not account.auto_disabled
+            and quota["success"]
+            and quota["remaining_value"] > 0
+        ]
+        if available:
+            available.sort(key=lambda item: _proxy_fill_sort_key(item[0], item[1]))
+            return available[0]
+
+        sorted_results = sorted(
+            results,
+            key=lambda item: (item[0].fill_priority, item[0].name, item[0].id),
+        )
+        for account, quota in sorted_results:
+            if account.auto_disabled:
+                errors.append(
+                    f"{account.name}: {account.auto_disabled_reason or '账号已自动禁用。'}"
+                )
+                continue
+            if not quota["success"]:
+                errors.append(f"{account.name}: {quota['message'] or '额度查询失败'}")
+                continue
+            if quota["remaining_value"] <= 0:
+                errors.append(f"{account.name}: 剩余额度为 0%")
+                continue
+
+        raise ProxySelectionError(
+            503,
+            errors[0] if errors else "当前没有可用账号可供 API 调用。",
+        )
+
     for index in index_order:
         account, quota = _check_proxy_candidate(
             store,
@@ -323,6 +383,8 @@ def _parse_dashboard_view(value: str | None) -> str:
         return "settings"
     if normalized == "stats":
         return "stats"
+    if normalized == "logs":
+        return "logs"
     return "accounts"
 
 
@@ -349,6 +411,36 @@ def _build_page_numbers(current_page: int, total_pages: int) -> list[int]:
     end = min(total_pages, start + 4)
     start = max(1, end - 4)
     return list(range(start, end + 1))
+
+
+def _is_stream_summary_empty(summary: dict[str, Any]) -> bool:
+    return (
+        int(summary.get("text_chars") or 0) <= 0
+        and int(summary.get("tool_use_blocks") or 0) <= 0
+    )
+
+
+def _summarize_non_stream_payload(payload: dict[str, Any]) -> dict[str, int | bool]:
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return {"text_chars": 0, "tool_use_blocks": 0, "empty_response": True}
+
+    text_chars = 0
+    tool_use_blocks = 0
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        block_type = str(block.get("type") or "")
+        if block_type == "text":
+            text_chars += len(str(block.get("text") or ""))
+        elif block_type == "tool_use":
+            tool_use_blocks += 1
+
+    return {
+        "text_chars": text_chars,
+        "tool_use_blocks": tool_use_blocks,
+        "empty_response": text_chars <= 0 and tool_use_blocks <= 0,
+    }
 
 
 def _build_quota_view(result: dict[str, Any]) -> dict[str, Any]:
@@ -523,6 +615,7 @@ def _build_dashboard_items(
                 "id": account.id,
                 "name": account.name,
                 "utdid": account.utdid,
+                "fill_priority": account.fill_priority,
                 "masked_access_token": mask_token(account.access_token),
                 "expires_at_text": format_timestamp(account.expires_at),
                 "added_at": account.added_at,
@@ -580,6 +673,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     store = AccountStore(settings.accounts_dir, settings.accounts_file)
     client = AccioClient(settings)
     usage_stats_store = UsageStatsStore(settings.stats_file)
+    api_log_store = ApiLogStore(settings.api_logs_file)
     panel_settings_store = PanelSettingsStore(
         settings.settings_file,
         settings.legacy_settings_file,
@@ -603,6 +697,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.store = store
     application.state.client = client
     application.state.usage_stats_store = usage_stats_store
+    application.state.api_log_store = api_log_store
     application.state.panel_settings_store = panel_settings_store
     application.state.quota_scheduler_task = None
     application.state.proxy_round_robin_index = 0
@@ -661,6 +756,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         stats_snapshot = usage_stats_store.snapshot(
             {account.id: account.name for account in all_accounts}
         )
+        api_logs = api_log_store.recent(200) if current_view == "logs" else []
         dashboard_items = _build_dashboard_items(
             page_accounts,
             client,
@@ -698,6 +794,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "page_start_index": page_start + 1 if page_accounts else 0,
                 "page_end_index": page_start + len(page_accounts),
                 "usage_stats": stats_snapshot,
+                "api_logs": api_logs,
             },
         )
 
@@ -815,9 +912,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def anthropic_messages(request: Request) -> Response:
         panel_settings = panel_settings_store.load()
         usage_stats_store: UsageStatsStore = application.state.usage_stats_store
+        api_log_store: ApiLogStore = application.state.api_log_store
         unauthorized = _authorize_proxy_request(request, panel_settings)
         if unauthorized:
             return unauthorized
+
+        started_at = time.perf_counter()
 
         raw_body = await request.body()
         if not raw_body.strip():
@@ -844,6 +944,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
 
         model = str(payload.get("model") or DEFAULT_ANTHROPIC_MODEL)
+        requested_stream = payload.get("stream", True) is not False
+        messages_value = payload.get("messages")
+        messages_count = len(messages_value) if isinstance(messages_value, list) else 0
+        try:
+            max_tokens = int(payload.get("max_tokens") or 0)
+        except (TypeError, ValueError):
+            max_tokens = 0
         if model not in SUPPORTED_ANTHROPIC_MODELS_SET:
             return _anthropic_error_response(
                 400,
@@ -858,6 +965,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 panel_settings,
             )
         except ProxySelectionError as exc:
+            api_log_store.record(
+                {
+                    "level": "error",
+                    "event": "v1_messages",
+                    "success": False,
+                    "emptyResponse": False,
+                    "accountId": "",
+                    "accountName": "-",
+                    "fillPriority": None,
+                    "model": model,
+                    "stream": requested_stream,
+                    "strategy": panel_settings.api_account_strategy,
+                    "requestId": "",
+                    "message": exc.message,
+                    "statusCode": exc.status_code,
+                    "stopReason": "proxy_selection_failed",
+                    "inputTokens": 0,
+                    "outputTokens": 0,
+                    "remainingQuota": None,
+                    "usedQuota": None,
+                    "messagesCount": messages_count,
+                    "maxTokens": max_tokens,
+                    "durationMs": int((time.perf_counter() - started_at) * 1000),
+                }
+            )
             return _anthropic_error_response(exc.status_code, exc.message)
 
         accio_body = build_accio_request(
@@ -866,6 +998,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             utdid=account.utdid,
             version=settings.version,
         )
+        request_id = str(accio_body.get("request_id") or "")
 
         try:
             upstream_response = await asyncio.to_thread(
@@ -882,6 +1015,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 output_tokens=0,
                 success=False,
                 stop_reason="request_exception",
+            )
+            api_log_store.record(
+                {
+                    "level": "error",
+                    "event": "v1_messages",
+                    "success": False,
+                    "emptyResponse": False,
+                    "accountId": account.id,
+                    "accountName": account.name,
+                    "fillPriority": account.fill_priority,
+                    "model": model,
+                    "stream": requested_stream,
+                    "strategy": panel_settings.api_account_strategy,
+                    "requestId": request_id,
+                    "message": f"上游请求失败: {exc}",
+                    "statusCode": 502,
+                    "stopReason": "request_exception",
+                    "inputTokens": 0,
+                    "outputTokens": 0,
+                    "remainingQuota": quota.get("remaining_value"),
+                    "usedQuota": quota.get("used_value"),
+                    "messagesCount": messages_count,
+                    "maxTokens": max_tokens,
+                    "durationMs": int((time.perf_counter() - started_at) * 1000),
+                }
             )
             return _anthropic_error_response(502, f"上游请求失败: {exc}")
 
@@ -907,12 +1065,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 success=False,
                 stop_reason="upstream_error",
             )
+            api_log_store.record(
+                {
+                    "level": "error",
+                    "event": "v1_messages",
+                    "success": False,
+                    "emptyResponse": False,
+                    "accountId": account.id,
+                    "accountName": account.name,
+                    "fillPriority": account.fill_priority,
+                    "model": model,
+                    "stream": requested_stream,
+                    "strategy": panel_settings.api_account_strategy,
+                    "requestId": request_id,
+                    "message": upstream_text or "上游返回错误。",
+                    "statusCode": upstream_response.status_code,
+                    "stopReason": "upstream_error",
+                    "inputTokens": 0,
+                    "outputTokens": 0,
+                    "remainingQuota": quota.get("remaining_value"),
+                    "usedQuota": quota.get("used_value"),
+                    "messagesCount": messages_count,
+                    "maxTokens": max_tokens,
+                    "durationMs": int((time.perf_counter() - started_at) * 1000),
+                }
+            )
             return _anthropic_error_response(
                 upstream_response.status_code,
                 upstream_text or "上游返回错误。",
             )
 
-        if payload.get("stream", True) is not False:
+        if requested_stream:
             def record_stream_summary(summary: dict[str, Any]) -> None:
                 usage = summary.get("usage") if isinstance(summary, dict) else {}
                 if not isinstance(usage, dict):
@@ -924,6 +1107,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     output_tokens=int(usage.get("output_tokens") or 0),
                     success=True,
                     stop_reason=str(summary.get("stop_reason") or "end_turn"),
+                )
+                empty_response = _is_stream_summary_empty(summary)
+                api_log_store.record(
+                    {
+                        "level": "warn" if empty_response else "info",
+                        "event": "v1_messages",
+                        "success": True,
+                        "emptyResponse": empty_response,
+                        "accountId": account.id,
+                        "accountName": account.name,
+                        "fillPriority": account.fill_priority,
+                        "model": model,
+                        "stream": True,
+                        "strategy": panel_settings.api_account_strategy,
+                        "requestId": request_id,
+                        "message": "空回复" if empty_response else "流式调用完成",
+                        "statusCode": 200,
+                        "stopReason": str(summary.get("stop_reason") or "end_turn"),
+                        "inputTokens": int(usage.get("input_tokens") or 0),
+                        "outputTokens": int(usage.get("output_tokens") or 0),
+                        "remainingQuota": quota.get("remaining_value"),
+                        "usedQuota": quota.get("used_value"),
+                        "messagesCount": messages_count,
+                        "maxTokens": max_tokens,
+                        "textChars": int(summary.get("text_chars") or 0),
+                        "thinkingChars": int(summary.get("thinking_chars") or 0),
+                        "toolUseBlocks": int(summary.get("tool_use_blocks") or 0),
+                        "durationMs": int((time.perf_counter() - started_at) * 1000),
+                    }
                 )
 
             return StreamingResponse(
@@ -944,6 +1156,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         usage = response_payload.get("usage") if isinstance(response_payload, dict) else {}
         if not isinstance(usage, dict):
             usage = {}
+        output_summary = _summarize_non_stream_payload(response_payload)
         usage_stats_store.record_message(
             account_id=account.id,
             model=model,
@@ -951,6 +1164,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             output_tokens=int(usage.get("output_tokens") or 0),
             success=True,
             stop_reason=str(response_payload.get("stop_reason") or "end_turn"),
+        )
+        api_log_store.record(
+            {
+                "level": "warn" if output_summary["empty_response"] else "info",
+                "event": "v1_messages",
+                "success": True,
+                "emptyResponse": bool(output_summary["empty_response"]),
+                "accountId": account.id,
+                "accountName": account.name,
+                "fillPriority": account.fill_priority,
+                "model": model,
+                "stream": False,
+                "strategy": panel_settings.api_account_strategy,
+                "requestId": request_id,
+                "message": "空回复" if output_summary["empty_response"] else "非流式调用完成",
+                "statusCode": 200,
+                "stopReason": str(response_payload.get("stop_reason") or "end_turn"),
+                "inputTokens": int(usage.get("input_tokens") or 0),
+                "outputTokens": int(usage.get("output_tokens") or 0),
+                "remainingQuota": quota.get("remaining_value"),
+                "usedQuota": quota.get("used_value"),
+                "messagesCount": messages_count,
+                "maxTokens": max_tokens,
+                "textChars": int(output_summary["text_chars"] or 0),
+                "toolUseBlocks": int(output_summary["tool_use_blocks"] or 0),
+                "durationMs": int((time.perf_counter() - started_at) * 1000),
+            }
         )
         return JSONResponse(response_payload, headers=response_headers)
 
@@ -1216,6 +1456,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "account": {
                     "id": updated.id,
                     "name": updated.name,
+                    "updatedAt": updated.updated_at,
+                },
+            }
+        )
+
+    @application.patch("/api/accounts/{account_id}/priority")
+    def update_account_priority(
+        request: Request,
+        account_id: str,
+        payload: dict[str, Any] = Body(...),
+    ) -> JSONResponse:
+        if not _is_admin_authenticated(request):
+            return _unauthorized_json()
+
+        raw_priority = payload.get("fillPriority") if isinstance(payload, dict) else None
+        try:
+            fill_priority = int(str(raw_priority).strip())
+        except (AttributeError, TypeError, ValueError):
+            return JSONResponse(
+                {"success": False, "message": "优先级必须是大于等于 0 的整数"},
+                status_code=400,
+            )
+        if fill_priority < 0:
+            return JSONResponse(
+                {"success": False, "message": "优先级必须是大于等于 0 的整数"},
+                status_code=400,
+            )
+
+        updated = store.set_fill_priority(account_id, fill_priority)
+        if not updated:
+            return JSONResponse(
+                {"success": False, "message": "账号不存在"},
+                status_code=404,
+            )
+
+        return JSONResponse(
+            {
+                "success": True,
+                "message": f"{updated.name} 优先级已更新为 {updated.fill_priority}",
+                "account": {
+                    "id": updated.id,
+                    "fillPriority": updated.fill_priority,
                     "updatedAt": updated.updated_at,
                 },
             }
@@ -1537,6 +1819,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "id": account.id,
                     "name": account.name,
                     "utdid": account.utdid,
+                    "fillPriority": account.fill_priority,
                     "accessToken": account.access_token,
                     "refreshToken": account.refresh_token,
                     "expiresAtText": format_timestamp(account.expires_at),
@@ -1612,6 +1895,7 @@ def run() -> None:
     print(f"上游代理: {panel_settings.upstream_proxy_url or '未配置'}")
     print(f"账号目录: {settings.accounts_dir}")
     print(f"统计文件: {settings.stats_file}")
+    print(f"日志文件: {settings.api_logs_file}")
     print(f"旧版迁移源: {settings.accounts_file}")
     print(f"配置文件: {settings.settings_file}")
     print("=" * 56)

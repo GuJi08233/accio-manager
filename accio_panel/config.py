@@ -50,6 +50,10 @@ class Settings:
         return self.data_dir / "stats.json"
 
     @property
+    def api_logs_file(self) -> Path:
+        return self.data_dir / "api-logs.jsonl"
+
+    @property
     def legacy_settings_file(self) -> Path:
         return self.data_dir / "accio-settings.json"
 

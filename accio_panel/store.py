@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .models import Account, normalize_timestamp, now_text
+from .models import Account, normalize_fill_priority, normalize_timestamp, now_text
 from .utils import new_utdid
 
 
@@ -42,6 +42,10 @@ class AccountStore:
             changed = True
         if not account.utdid:
             account.utdid = new_utdid()
+            changed = True
+        normalized_fill_priority = normalize_fill_priority(account.fill_priority)
+        if normalized_fill_priority != account.fill_priority:
+            account.fill_priority = normalized_fill_priority
             changed = True
         if account.expires_at is not None:
             normalized_expires_at = normalize_timestamp(account.expires_at)
@@ -310,6 +314,16 @@ class AccountStore:
             if not account:
                 return None
             account.name = name
+            account.updated_at = now_text()
+            self._write_account_unlocked(account)
+            return account
+
+    def set_fill_priority(self, account_id: str, fill_priority: int) -> Account | None:
+        with self._lock:
+            account = self.get_account(account_id)
+            if not account:
+                return None
+            account.fill_priority = normalize_fill_priority(fill_priority)
             account.updated_at = now_text()
             self._write_account_unlocked(account)
             return account
