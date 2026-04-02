@@ -4,6 +4,7 @@ import json
 import threading
 import uuid
 from pathlib import Path
+from typing import Any
 
 from .models import Account, normalize_timestamp, now_text
 from .utils import new_utdid
@@ -144,6 +145,94 @@ class AccountStore:
                 if suffix.isdigit():
                     max_index = max(max_index, int(suffix))
         return f"账号{max_index + 1}"
+
+    def _match_existing_account_unlocked(
+        self,
+        accounts: list[Account],
+        imported: Account,
+    ) -> Account | None:
+        for account in accounts:
+            if imported.id and account.id == imported.id:
+                return account
+            if imported.access_token and account.access_token == imported.access_token:
+                return account
+            if imported.refresh_token and account.refresh_token == imported.refresh_token:
+                return account
+            if imported.cookie and account.cookie and account.cookie == imported.cookie:
+                return account
+        return None
+
+    def import_accounts(
+        self,
+        payloads: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        with self._lock:
+            accounts = self._read_all_unlocked()
+            created_count = 0
+            updated_count = 0
+            failures: list[str] = []
+
+            for index, payload in enumerate(payloads, start=1):
+                try:
+                    imported = Account.from_dict(payload)
+                    self._normalize_account(imported)
+                except Exception:
+                    failures.append(f"第 {index} 项账号数据格式无效")
+                    continue
+
+                if not imported.access_token:
+                    failures.append(f"{imported.name}: 缺少 accessToken")
+                    continue
+                if not imported.refresh_token:
+                    failures.append(f"{imported.name}: 缺少 refreshToken")
+                    continue
+
+                now = now_text()
+                imported.expires_at = normalize_timestamp(imported.expires_at)
+                if not imported.utdid:
+                    imported.utdid = new_utdid()
+                if not imported.name or imported.name == "未命名账号":
+                    imported.name = self._next_account_name(accounts)
+                if not imported.added_at:
+                    imported.added_at = now
+
+                existing = self._match_existing_account_unlocked(accounts, imported)
+                if existing:
+                    existing.name = imported.name or existing.name
+                    existing.access_token = imported.access_token
+                    existing.refresh_token = imported.refresh_token
+                    existing.utdid = imported.utdid or existing.utdid or new_utdid()
+                    existing.expires_at = imported.expires_at
+                    existing.cookie = imported.cookie or existing.cookie
+                    existing.manual_enabled = imported.manual_enabled
+                    existing.auto_disabled = imported.auto_disabled
+                    existing.auto_disabled_reason = (
+                        imported.auto_disabled_reason if imported.auto_disabled else None
+                    )
+                    existing.last_quota_check_at = imported.last_quota_check_at
+                    existing.next_quota_check_at = imported.next_quota_check_at
+                    existing.next_quota_check_reason = imported.next_quota_check_reason
+                    existing.added_at = imported.added_at or existing.added_at
+                    existing.updated_at = now
+                    self._write_account_unlocked(existing)
+                    updated_count += 1
+                    continue
+
+                while self._account_file(imported.id).exists():
+                    imported.id = uuid.uuid4().hex
+
+                imported.updated_at = now
+                self._write_account_unlocked(imported)
+                accounts.append(imported)
+                created_count += 1
+
+            return {
+                "createdCount": created_count,
+                "updatedCount": updated_count,
+                "failureCount": len(failures),
+                "importedCount": created_count + updated_count,
+                "failures": failures,
+            }
 
     def upsert_from_callback(
         self,

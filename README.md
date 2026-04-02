@@ -5,6 +5,7 @@
 - 多账号本地保存
 - 登录链接生成
 - 登录成功回调保存 Token
+- 账号 JSON 下载与导入
 - 查看额度与重置时间
 - 单账号 / 批量刷新 Token
 - 配置公开回调地址
@@ -36,6 +37,41 @@ uv run python main.py
 - `http://127.0.0.1:4097/login`
 - `http://127.0.0.1:4097/v1/models`
 - `http://127.0.0.1:4097/v1/messages`
+
+## Docker
+
+本地构建：
+
+```bash
+docker build -t accio-panel:latest .
+```
+
+本地运行：
+
+```bash
+docker run -d \
+  --name accio-panel \
+  -p 4097:4097 \
+  -v accio-panel-data:/app/data \
+  -e ACCIO_CALLBACK_HOST=127.0.0.1 \
+  accio-panel:latest
+```
+
+说明：
+
+- 容器内服务监听 `0.0.0.0:4097`
+- 默认数据目录是 `/app/data`
+- 如果部署到服务器域名，建议在面板配置区填写 `publicBaseUrl`
+
+## GitHub Packages
+
+仓库已添加 GitHub Actions 工作流：
+
+- 文件：`.github/workflows/docker-publish.yml`
+- 触发方式：`push` 到 `main`、`workflow_dispatch` 手动触发
+- 推送目标：`ghcr.io/<owner>/<repo>`
+
+首次推送成功后，可以在仓库的 `Packages` 页面看到镜像。
 
 首次管理员密码默认值为：
 
@@ -95,6 +131,7 @@ data/
 - `stats.json`：`/v1/messages` 的累计调用统计
 - `accounts/*.json`：每个账号单独一个文件
 - `accio-accounts.json`：旧版单文件账号列表，首次启动会自动迁移到 `accounts/` 目录
+- 面板支持导入单账号 JSON，也支持直接导入旧版 `accio-accounts.json` 数组文件
 
 ## 自动调度
 

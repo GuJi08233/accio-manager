@@ -674,6 +674,7 @@
     <section class="toolbar">
       <a class="link-button primary" href="/login" target="_blank" rel="noreferrer">打开登录页</a>
       <button class="button secondary" type="button" onclick="copyLoginLink()">复制登录链接</button>
+      <button class="button secondary" type="button" onclick="openImportDialog()">导入 JSON</button>
       <button class="button success" type="button" onclick="refreshAll()">刷新全部 Token</button>
       <a class="link-button secondary" href="/dashboard?view=settings&page=1&pageSize={{ page_size }}">配置中心</a>
       <a class="link-button secondary" href="/dashboard?view=accounts&page={{ current_page }}&pageSize={{ page_size }}">账号区域</a>
@@ -947,6 +948,7 @@
   </main>
 
   <div id="toast" class="toast"></div>
+  <input id="import-files-input" type="file" accept=".json,application/json" multiple style="display:none" onchange="handleImportFiles(event)">
 
   <div id="detail-modal" class="modal" onclick="closeModalOnMask(event, 'detail-modal')">
     <div class="modal-card">
@@ -975,6 +977,10 @@
       if (event.target.id === id) {
         closeModal(id);
       }
+    }
+
+    function openImportDialog() {
+      document.getElementById('import-files-input').click();
     }
 
     function selectedAccountIds() {
@@ -1109,6 +1115,48 @@
       } catch (error) {
         console.error(error);
         showToast('批量刷新失败，请稍后重试');
+      }
+    }
+
+    async function handleImportFiles(event) {
+      const input = event.target;
+      const files = Array.from(input.files || []);
+      if (!files.length) {
+        return;
+      }
+
+      try {
+        showToast(`正在导入 ${files.length} 个文件...`);
+        const payloadFiles = await Promise.all(
+          files.map(async (file) => ({
+            name: file.name,
+            content: await file.text()
+          }))
+        );
+
+        const response = await fetch('/api/accounts/import', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            files: payloadFiles
+          })
+        });
+        const payload = await response.json();
+        if (payload.failures && payload.failures.length) {
+          showToast(`${payload.message || '导入已完成'}，失败 ${payload.failures.length} 项`);
+        } else {
+          showToast(payload.message || '导入完成');
+        }
+        if (payload.importedCount > 0) {
+          window.setTimeout(() => window.location.reload(), 800);
+        }
+      } catch (error) {
+        console.error(error);
+        showToast('导入失败，请稍后重试');
+      } finally {
+        input.value = '';
       }
     }
 

@@ -20,6 +20,10 @@ class Settings:
     version: str = os.getenv("ACCIO_VERSION", "0.5.2")
     base_url: str = os.getenv("ACCIO_BASE_URL", "https://phoenix-gw.alibaba.com")
     callback_host: str = os.getenv("ACCIO_CALLBACK_HOST", "127.0.0.1")
+    server_host: str = os.getenv(
+        "ACCIO_SERVER_HOST",
+        os.getenv("ACCIO_CALLBACK_HOST", "127.0.0.1"),
+    )
     callback_port: int = int(os.getenv("ACCIO_CALLBACK_PORT", "4097"))
     request_timeout: float = float(os.getenv("ACCIO_REQUEST_TIMEOUT", "15"))
     auto_open_browser: bool = _env_flag("ACCIO_AUTO_OPEN_BROWSER", True)

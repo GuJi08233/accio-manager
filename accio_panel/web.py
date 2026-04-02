@@ -1305,6 +1305,108 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
         )
 
+    @application.post("/api/accounts/import")
+    def import_accounts(
+        request: Request,
+        payload: dict[str, Any] = Body(...),
+    ) -> JSONResponse:
+        if not _is_admin_authenticated(request):
+            return _unauthorized_json()
+
+        raw_files = payload.get("files")
+        if not isinstance(raw_files, list):
+            return JSONResponse(
+                {"success": False, "message": "files 必须是数组"},
+                status_code=400,
+            )
+
+        account_payloads: list[dict[str, Any]] = []
+        failures: list[str] = []
+
+        for index, item in enumerate(raw_files, start=1):
+            if not isinstance(item, dict):
+                failures.append(f"第 {index} 个文件格式无效")
+                continue
+
+            file_name = str(item.get("name") or f"第 {index} 个文件").strip()
+            content = str(item.get("content") or "").strip()
+            if not content:
+                failures.append(f"{file_name}: 文件内容为空")
+                continue
+
+            try:
+                parsed = json.loads(content)
+            except json.JSONDecodeError:
+                failures.append(f"{file_name}: 不是合法的 JSON")
+                continue
+
+            if isinstance(parsed, dict):
+                account_payloads.append(parsed)
+                continue
+
+            if isinstance(parsed, list):
+                valid_items = 0
+                for item_index, account_payload in enumerate(parsed, start=1):
+                    if not isinstance(account_payload, dict):
+                        failures.append(
+                            f"{file_name}: 第 {item_index} 项不是账号对象"
+                        )
+                        continue
+                    account_payloads.append(account_payload)
+                    valid_items += 1
+                if valid_items == 0:
+                    failures.append(f"{file_name}: 没有可导入的账号数据")
+                continue
+
+            failures.append(f"{file_name}: 仅支持账号对象或账号数组")
+
+        if not account_payloads and failures:
+            return JSONResponse(
+                {
+                    "success": False,
+                    "message": "导入失败，没有可用的账号数据",
+                    "createdCount": 0,
+                    "updatedCount": 0,
+                    "failureCount": len(failures),
+                    "importedCount": 0,
+                    "failures": failures,
+                },
+                status_code=400,
+            )
+
+        if not account_payloads:
+            return JSONResponse(
+                {"success": False, "message": "请至少选择一个账号 JSON 文件"},
+                status_code=400,
+            )
+
+        result = store.import_accounts(account_payloads)
+        merged_failures = failures + result["failures"]
+        imported_count = result["importedCount"]
+        created_count = result["createdCount"]
+        updated_count = result["updatedCount"]
+        failure_count = len(merged_failures)
+
+        if imported_count > 0:
+            message = (
+                f"已导入 {imported_count} 个账号"
+                f"（新增 {created_count}，更新 {updated_count}）"
+            )
+        else:
+            message = "没有成功导入任何账号"
+
+        return JSONResponse(
+            {
+                "success": failure_count == 0,
+                "message": message,
+                "createdCount": created_count,
+                "updatedCount": updated_count,
+                "failureCount": failure_count,
+                "importedCount": imported_count,
+                "failures": merged_failures,
+            }
+        )
+
     @application.get("/api/accounts/{account_id}/detail")
     def account_detail_data(request: Request, account_id: str) -> JSONResponse:
         if not _is_admin_authenticated(request):
@@ -1420,4 +1522,4 @@ def run() -> None:
         )
         threading.Timer(1, lambda: webbrowser.open(dashboard_url)).start()
 
-    uvicorn.run(app, host=settings.callback_host, port=settings.callback_port)
+    uvicorn.run(app, host=settings.server_host, port=settings.callback_port)
