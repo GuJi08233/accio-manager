@@ -561,6 +561,9 @@ def iter_anthropic_sse_events(
 
             yield event_name, event_payload
 
+    if started:
+        yield "message_stop", {"type": "message_stop"}
+
 
 def iter_anthropic_sse_bytes(
     response: requests.Response,
@@ -671,6 +674,7 @@ def decode_non_stream_response(
         "model": model,
         "content": content,
         "stop_reason": summary["stop_reason"],
+        "stop_sequence": None,
         "usage": summary["usage"],
     }
 
