@@ -209,6 +209,24 @@ class AccioClient:
             proxy_url=proxy_url,
         )
 
+    def query_llm_config(
+        self,
+        account: Account,
+        *,
+        proxy_url: str | None = None,
+    ) -> dict[str, Any]:
+        return self._request_json(
+            "POST",
+            f"{self.settings.base_url}/api/llm/config",
+            json={"token": account.access_token},
+            headers={
+                "content-type": "application/json",
+                "accept": "application/json",
+                "user-agent": "node",
+            },
+            proxy_url=proxy_url,
+        )
+
     def activate_account(
         self,
         account: Account,

@@ -33,8 +33,6 @@ from .app_settings import (
 )
 from .anthropic_proxy import (
     DEFAULT_ANTHROPIC_MODEL,
-    SUPPORTED_PROXY_MODELS,
-    SUPPORTED_PROXY_MODELS_SET,
     anthropic_error_payload,
     build_accio_request,
     build_models_payload,
@@ -44,8 +42,6 @@ from .anthropic_proxy import (
 from .client import AccioClient
 from .config import Settings
 from .gemini_proxy import (
-    SUPPORTED_GEMINI_MODELS,
-    SUPPORTED_GEMINI_MODELS_SET,
     build_accio_request_from_gemini,
     build_gemini_models_payload,
     decode_gemini_generate_content_response,
@@ -53,6 +49,12 @@ from .gemini_proxy import (
     extract_gemini_usage,
     gemini_error_payload,
     summarize_gemini_response,
+)
+from .model_catalog import (
+    build_gemini_models_payload_from_catalog,
+    build_openai_models_payload_from_catalog,
+    extract_model_catalog,
+    list_model_names,
 )
 from .models import Account
 from .openai_proxy import (
@@ -75,6 +77,7 @@ ENABLED_ACCOUNT_CHECK_INTERVAL_SECONDS = 15 * 60
 FAILED_ACCOUNT_RETRY_SECONDS = 5 * 60
 RECOVERY_CHECK_BUFFER_SECONDS = 90
 SCHEDULER_TICK_SECONDS = 30
+MODEL_CATALOG_CACHE_SECONDS = 60
 PAGE_SIZE_OPTIONS = (10, 20, 50)
 DEFAULT_PAGE_SIZE = PAGE_SIZE_OPTIONS[0]
 
@@ -192,6 +195,163 @@ def _now_timestamp() -> int:
 
 def _api_account_strategy_label(strategy: str) -> str:
     return "轮询" if strategy == "round_robin" else "优先填充"
+
+
+def _initial_model_catalog_cache() -> dict[str, Any]:
+    return {
+        "entries": [],
+        "expiresAt": 0.0,
+        "loadedAt": 0.0,
+        "sourceAccountId": "",
+        "error": "",
+    }
+
+
+def _sorted_enabled_accounts(store: AccountStore) -> list[Account]:
+    return sorted(
+        _ordered_proxy_candidates(store),
+        key=lambda item: (item.fill_priority, item.name, item.id),
+    )
+
+
+def _query_llm_config_with_refresh_fallback(
+    store: AccountStore,
+    client: AccioClient,
+    account: Account,
+    panel_settings: PanelSettings,
+) -> tuple[Account, dict[str, Any]]:
+    config_result = client.query_llm_config(
+        account,
+        proxy_url=panel_settings.upstream_proxy_url,
+    )
+    if config_result.get("success"):
+        return account, config_result
+
+    refresh_result = _refresh_token(client, account, panel_settings)
+    if not refresh_result.get("success"):
+        return account, config_result
+
+    refreshed_data = refresh_result.get("data") or {}
+    updated_account = store.update_tokens(
+        account.id,
+        access_token=str(refreshed_data.get("accessToken") or account.access_token),
+        refresh_token=str(refreshed_data.get("refreshToken") or account.refresh_token),
+        expires_at=refreshed_data.get("expiresAt"),
+    )
+    if updated_account is None:
+        return account, config_result
+    account = updated_account
+    retried_result = client.query_llm_config(
+        account,
+        proxy_url=panel_settings.upstream_proxy_url,
+    )
+    return account, retried_result
+
+
+def _load_dynamic_model_catalog(
+    application: FastAPI,
+    panel_settings: PanelSettings,
+) -> tuple[list[dict[str, Any]], str]:
+    cache = getattr(application.state, "model_catalog_cache", None)
+    if not isinstance(cache, dict):
+        cache = _initial_model_catalog_cache()
+        application.state.model_catalog_cache = cache
+
+    now_value = time.time()
+    cached_entries = cache.get("entries")
+    if isinstance(cached_entries, list) and cached_entries and float(cache.get("expiresAt") or 0) > now_value:
+        return list(cached_entries), "cache"
+
+    store: AccountStore = application.state.store
+    client: AccioClient = application.state.client
+    errors: list[str] = []
+    for candidate in _sorted_enabled_accounts(store):
+        account, config_result = _query_llm_config_with_refresh_fallback(
+            store,
+            client,
+            candidate,
+            panel_settings,
+        )
+        entries = extract_model_catalog(config_result) if isinstance(config_result, dict) else []
+        if entries:
+            cache.update(
+                {
+                    "entries": list(entries),
+                    "expiresAt": now_value + MODEL_CATALOG_CACHE_SECONDS,
+                    "loadedAt": now_value,
+                    "sourceAccountId": account.id,
+                    "error": "",
+                }
+            )
+            return list(entries), "live"
+        if isinstance(config_result, dict):
+            message = str(config_result.get("message") or "模型配置为空")
+            errors.append(f"{account.name}: {message}")
+
+    if isinstance(cached_entries, list) and cached_entries:
+        cache["error"] = errors[0] if errors else "模型目录刷新失败，已回退到旧缓存。"
+        return list(cached_entries), "stale"
+
+    cache["error"] = errors[0] if errors else "当前没有可用账号可拉取模型目录。"
+    return [], "unavailable"
+
+
+def _dynamic_proxy_model_names(
+    application: FastAPI,
+    panel_settings: PanelSettings,
+) -> set[str]:
+    entries, _ = _load_dynamic_model_catalog(application, panel_settings)
+    return list_model_names(entries)
+
+
+def _dynamic_gemini_model_names(
+    application: FastAPI,
+    panel_settings: PanelSettings,
+) -> set[str]:
+    entries, _ = _load_dynamic_model_catalog(application, panel_settings)
+    return list_model_names(entries, provider="gemini")
+
+
+def _model_catalog_dashboard_text(
+    entries: list[dict[str, Any]],
+    source: str,
+) -> str:
+    if not entries:
+        return "动态模型目录暂不可用，列表接口会回退到内置静态模型。"
+
+    names = sorted(list_model_names(entries))
+    preview = names[:8]
+    preview_text = " / ".join(preview)
+    if len(names) > len(preview):
+        preview_text = f"{preview_text} / ...（共 {len(names)} 个）"
+
+    source_label = {
+        "live": "实时",
+        "cache": "缓存",
+        "stale": "旧缓存",
+        "unavailable": "不可用",
+    }.get(source, source)
+    return f"{preview_text}（{source_label}）"
+
+
+def _is_allowed_dynamic_model(
+    application: FastAPI,
+    panel_settings: PanelSettings,
+    model_name: str,
+    *,
+    provider: str | None = None,
+) -> tuple[bool, list[str]]:
+    normalized = str(model_name or "").strip()
+    if not normalized:
+        return False, []
+    available = (
+        sorted(_dynamic_gemini_model_names(application, panel_settings))
+        if provider == "gemini"
+        else sorted(_dynamic_proxy_model_names(application, panel_settings))
+    )
+    if available:
+        return normalized in set(available), available
+    return True, []
 
 
 def _proxy_fill_sort_key(account: Account, quota: dict[str, Any]) -> tuple[Any, ...]:
@@ -864,6 +1024,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.panel_settings_store = panel_settings_store
     application.state.quota_scheduler_task = None
     application.state.proxy_round_robin_index = 0
+    application.state.model_catalog_cache = _initial_model_catalog_cache()
 
     @application.on_event("startup")
     async def startup_scheduler() -> None:
@@ -916,6 +1077,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         page_start = (current_page - 1) * page_size
         page_end = page_start + page_size
         page_accounts = all_accounts[page_start:page_end] if current_view == "accounts" else []
+        model_catalog, model_catalog_source = _load_dynamic_model_catalog(
+            application,
+            panel_settings,
+        )
         stats_snapshot = usage_stats_store.snapshot(
             {account.id: account.name for account in all_accounts}
         )
@@ -947,7 +1112,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "api_account_strategy_label": _api_account_strategy_label(
                     panel_settings.api_account_strategy
                 ),
-                "supported_models_text": " / ".join(SUPPORTED_PROXY_MODELS),
+                "supported_models_text": _model_catalog_dashboard_text(
+                    model_catalog,
+                    model_catalog_source,
+                ),
                 "current_view": current_view,
                 "current_page": current_page,
                 "page_size": page_size,
@@ -1066,7 +1234,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         unauthorized = _authorize_proxy_request(request, panel_settings)
         if unauthorized:
             return unauthorized
-        return JSONResponse(build_models_payload())
+        catalog, source = _load_dynamic_model_catalog(application, panel_settings)
+        payload = (
+            build_openai_models_payload_from_catalog(catalog)
+            if catalog
+            else build_models_payload()
+        )
+        response = JSONResponse(payload)
+        response.headers["x-accio-model-source"] = (
+            source if catalog else "static-fallback"
+        )
+        return response
 
     @application.get("/models")
     def anthropic_models_compat(request: Request) -> JSONResponse:
@@ -1074,7 +1252,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         unauthorized = _authorize_proxy_request(request, panel_settings)
         if unauthorized:
             return unauthorized
-        return JSONResponse(build_models_payload())
+        catalog, source = _load_dynamic_model_catalog(application, panel_settings)
+        payload = (
+            build_openai_models_payload_from_catalog(catalog)
+            if catalog
+            else build_models_payload()
+        )
+        response = JSONResponse(payload)
+        response.headers["x-accio-model-source"] = (
+            source if catalog else "static-fallback"
+        )
+        return response
 
     @application.get("/v1beta/models")
     def gemini_models(request: Request) -> JSONResponse:
@@ -1085,7 +1273,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 gemini_error_payload(401, "无效的 API Key", error_status="UNAUTHENTICATED"),
                 status_code=401,
             )
-        return JSONResponse(build_gemini_models_payload())
+        catalog, source = _load_dynamic_model_catalog(application, panel_settings)
+        payload = (
+            build_gemini_models_payload_from_catalog(catalog)
+            if catalog
+            else build_gemini_models_payload()
+        )
+        response = JSONResponse(payload)
+        response.headers["x-accio-model-source"] = (
+            source if catalog else "static-fallback"
+        )
+        return response
 
     @application.post("/v1beta/models/{model_name}:generateContent")
     async def gemini_generate_content(request: Request, model_name: str) -> JSONResponse:
@@ -1099,10 +1297,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=401,
             )
 
-        if model_name not in SUPPORTED_GEMINI_MODELS_SET:
+        allowed, available = _is_allowed_dynamic_model(
+            application,
+            panel_settings,
+            model_name,
+            provider="gemini",
+        )
+        if not allowed:
             return _gemini_error_response(
                 400,
-                f"不支持模型 {model_name}。当前仅支持: {', '.join(SUPPORTED_GEMINI_MODELS)}",
+                f"不支持模型 {model_name}。当前可用 Gemini 模型: {', '.join(available)}",
             )
 
         started_at = time.perf_counter()
@@ -1363,10 +1567,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return _openai_error_response(400, "请求体必须是 JSON 对象。")
         model = str(payload.get("model") or DEFAULT_ANTHROPIC_MODEL)
         requested_stream = bool(payload.get("stream", False))
-        if model not in SUPPORTED_PROXY_MODELS_SET:
+        allowed, available = _is_allowed_dynamic_model(
+            application,
+            panel_settings,
+            model,
+        )
+        if not allowed:
             return _openai_error_response(
                 400,
-                f"不支持模型 {model}。当前仅支持: {', '.join(SUPPORTED_PROXY_MODELS)}",
+                f"不支持模型 {model}。当前可用模型: {', '.join(available)}",
                 code="model_not_found",
             )
 
@@ -1684,10 +1893,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except (TypeError, ValueError):
             max_tokens = 0
-        if model not in SUPPORTED_PROXY_MODELS_SET:
+        allowed, available = _is_allowed_dynamic_model(
+            application,
+            panel_settings,
+            model,
+        )
+        if not allowed:
             return _openai_error_response(
                 400,
-                f"不支持模型 {model}。当前仅支持: {', '.join(SUPPORTED_PROXY_MODELS)}",
+                f"不支持模型 {model}。当前可用模型: {', '.join(available)}",
                 code="model_not_found",
             )
 
@@ -2002,10 +2216,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             max_tokens = int(payload.get("max_tokens") or 0)
         except (TypeError, ValueError):
             max_tokens = 0
-        if model not in SUPPORTED_PROXY_MODELS_SET:
+        allowed, available = _is_allowed_dynamic_model(
+            application,
+            panel_settings,
+            model,
+        )
+        if not allowed:
             return _anthropic_error_response(
                 400,
-                f"不支持模型 {model}。当前仅支持: {', '.join(SUPPORTED_PROXY_MODELS)}",
+                f"不支持模型 {model}。当前可用模型: {', '.join(available)}",
                 error_type="invalid_request_error",
             )
 

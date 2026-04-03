@@ -660,7 +660,7 @@
         自动禁用: {{ "开启" if auto_disable_on_empty_quota else "关闭" }} /
         自动恢复: {{ "开启" if auto_enable_on_recovered_quota else "关闭" }}<br>
         API 路径: {{ api_base_url }}/v1/messages / {{ api_base_url }}/v1/chat/completions / {{ api_base_url }}/v1/responses / {{ api_base_url }}/v1beta/models/...:generateContent<br>
-        文本模型: {{ supported_models_text }} / Gemini 生图模型: gemini-3-pro-image-preview、gemini-3.1-flash-image-preview<br>
+        模型目录: {{ supported_models_text }}<br>
         调度策略: {{ api_account_strategy_label }} / API Key: 管理员密码<br>
         上游代理: {{ upstream_proxy_url or "未配置" }}
       </div>
