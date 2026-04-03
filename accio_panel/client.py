@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import secrets
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import unquote, urlencode
 
 import requests
 
@@ -22,14 +22,48 @@ class AccioClient:
             "https": proxy_url,
         }
 
-    def get_headers(self, utdid: str) -> dict[str, str]:
-        return {
+    def get_headers(
+        self,
+        utdid: str,
+        *,
+        accept: str | None = None,
+        cna: str | None = None,
+        user_agent: str | None = None,
+    ) -> dict[str, str]:
+        headers = {
             "content-type": "application/json",
             "x-language": "zh",
             "x-utdid": utdid,
             "x-app-version": self.settings.version,
             "x-os": "win32",
-            "accept": "application/json, text/plain, */*",
+            "accept": accept or "application/json, text/plain, */*",
+        }
+        if cna:
+            headers["x-cna"] = cna
+        if user_agent:
+            headers["user-agent"] = user_agent
+        return headers
+
+    def _extract_cookie_value(self, cookie_text: str | None, key: str) -> str | None:
+        if not cookie_text:
+            return None
+        normalized = str(cookie_text)
+        for _ in range(2):
+            decoded = unquote(normalized)
+            if decoded == normalized:
+                break
+            normalized = decoded
+        for part in normalized.split(";"):
+            name, separator, value = part.strip().partition("=")
+            if separator and name.strip() == key:
+                return value.strip() or None
+        return None
+
+    def _build_activation_body(self, account: Account) -> dict[str, Any]:
+        return {
+            "utdid": account.utdid,
+            "version": self.settings.version,
+            "accessToken": account.access_token,
         }
 
     def _request_json(
@@ -118,6 +152,127 @@ class AccioClient:
             headers=self.get_headers(account.utdid),
             proxy_url=proxy_url,
         )
+
+    def query_userinfo(
+        self,
+        account: Account,
+        *,
+        proxy_url: str | None = None,
+    ) -> dict[str, Any]:
+        return self._request_json(
+            "POST",
+            f"{self.settings.base_url}/api/auth/userinfo",
+            json=self._build_activation_body(account),
+            headers=self.get_headers(
+                account.utdid,
+                accept="*/*",
+                cna=self._extract_cookie_value(account.cookie, "cna"),
+                user_agent="node",
+            ),
+            proxy_url=proxy_url,
+        )
+
+    def query_invitation(
+        self,
+        account: Account,
+        *,
+        proxy_url: str | None = None,
+    ) -> dict[str, Any]:
+        return self._request_json(
+            "POST",
+            f"{self.settings.base_url}/api/invitation/query",
+            json=self._build_activation_body(account),
+            headers=self.get_headers(
+                account.utdid,
+                accept="*/*",
+                cna=self._extract_cookie_value(account.cookie, "cna"),
+                user_agent="node",
+            ),
+            proxy_url=proxy_url,
+        )
+
+    def query_channel(
+        self,
+        account: Account,
+        *,
+        proxy_url: str | None = None,
+    ) -> dict[str, Any]:
+        return self._request_json(
+            "POST",
+            f"{self.settings.base_url}/api/channel/query",
+            json={"accessToken": account.access_token},
+            headers={
+                "content-type": "application/json",
+                "accept": "*/*",
+                "user-agent": "node",
+            },
+            proxy_url=proxy_url,
+        )
+
+    def activate_account(
+        self,
+        account: Account,
+        *,
+        proxy_url: str | None = None,
+    ) -> dict[str, Any]:
+        userinfo = self.query_userinfo(account, proxy_url=proxy_url)
+        invitation = self.query_invitation(account, proxy_url=proxy_url)
+        channel = self.query_channel(account, proxy_url=proxy_url)
+
+        userinfo_success = bool(userinfo.get("success"))
+        invitation_success = bool(invitation.get("success"))
+        channel_success = bool(channel.get("success"))
+        required_success = userinfo_success and invitation_success
+
+        if required_success and channel_success:
+            message = "账号激活完成"
+        elif required_success:
+            message = "账号激活完成，渠道查询未成功"
+        else:
+            message = "账号激活未完成，请检查激活步骤结果"
+
+        userinfo_data = userinfo.get("data") if isinstance(userinfo.get("data"), dict) else {}
+        channel_data = channel.get("data") if isinstance(channel.get("data"), dict) else {}
+
+        return {
+            "success": required_success,
+            "message": message,
+            "userName": str(userinfo_data.get("userName") or ""),
+            "userId": str(userinfo_data.get("userId") or ""),
+            "accioId": str(userinfo_data.get("accioId") or ""),
+            "invitationGranted": invitation.get("data"),
+            "channelAuthorizations": channel_data.get("authorizations")
+            if isinstance(channel_data.get("authorizations"), list)
+            else [],
+            "steps": [
+                {
+                    "key": "userinfo",
+                    "label": "用户信息",
+                    "success": userinfo_success,
+                    "optional": False,
+                    "message": str(userinfo.get("message") or ""),
+                    "code": str(userinfo.get("code") or ""),
+                },
+                {
+                    "key": "invitation",
+                    "label": "邀请状态",
+                    "success": invitation_success,
+                    "optional": False,
+                    "message": str(invitation.get("message") or ""),
+                    "code": str(invitation.get("code") or ""),
+                    "data": invitation.get("data"),
+                },
+                {
+                    "key": "channel",
+                    "label": "渠道信息",
+                    "success": channel_success,
+                    "optional": True,
+                    "message": str(channel.get("message") or ""),
+                    "code": str(channel.get("code") or ""),
+                    "data": channel.get("data"),
+                },
+            ],
+        }
 
     def generate_content(
         self,

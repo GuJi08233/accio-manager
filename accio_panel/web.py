@@ -122,6 +122,24 @@ def _parse_callback_payload(callback_value: str) -> dict[str, str]:
     return params
 
 
+def _activate_callback_account(
+    client: AccioClient,
+    account: Account,
+    panel_settings: PanelSettings,
+) -> dict[str, Any]:
+    return client.activate_account(
+        account,
+        proxy_url=panel_settings.upstream_proxy_url,
+    )
+
+
+def _activation_summary_text(activation: dict[str, Any]) -> str:
+    message = str(activation.get("message") or "").strip()
+    if message:
+        return message
+    return "账号激活完成" if activation.get("success") else "账号激活未完成"
+
+
 def _import_callback_account(
     store: AccountStore,
     client: AccioClient,
@@ -131,20 +149,21 @@ def _import_callback_account(
     refresh_token: str,
     expires_at: str | int | None,
     cookie: str | None,
-) -> tuple[Account, dict[str, Any], bool]:
+) -> tuple[Account, dict[str, Any], bool, dict[str, Any]]:
     account, created = store.upsert_from_callback(
         access_token=access_token,
         refresh_token=refresh_token,
         expires_at=expires_at,
         cookie=cookie,
     )
+    activation = _activate_callback_account(client, account, panel_settings)
     account, quota = _apply_quota_result(
         store,
         account,
         _query_quota(client, account, panel_settings),
         panel_settings,
     )
-    return account, quota, created
+    return account, quota, created, activation
 
 
 def _now_timestamp() -> int:
@@ -867,7 +886,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
 
         panel_settings = panel_settings_store.load()
-        account, quota, created = _import_callback_account(
+        account, quota, created, activation = _import_callback_account(
             store,
             client,
             panel_settings,
@@ -879,7 +898,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(
             {
                 "success": True,
-                "message": "账号已导入到面板。" if created else "账号已存在，Token 已更新。",
+                "message": (
+                    ("账号已导入到面板。" if created else "账号已存在，Token 已更新。")
+                    + " "
+                    + _activation_summary_text(activation)
+                ).strip(),
                 "account": {
                     "id": account.id,
                     "name": account.name,
@@ -889,6 +912,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "addedAt": account.added_at,
                 },
                 "quota": quota,
+                "activation": activation,
             }
         )
 
@@ -1295,7 +1319,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
 
         panel_settings = panel_settings_store.load()
-        account, quota, created = _import_callback_account(
+        account, quota, created, activation = _import_callback_account(
             store,
             client,
             panel_settings,
@@ -1310,7 +1334,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             name="callback.html",
             context={
                 "title": "登录成功",
-                "message": "账号已保存到管理面板。" if created else "账号已存在，Token 已更新。",
+                "message": (
+                    ("账号已保存到管理面板。" if created else "账号已存在，Token 已更新。")
+                    + " "
+                    + _activation_summary_text(activation)
+                ).strip(),
                 "account": {
                     "id": account.id,
                     "name": account.name,
@@ -1320,6 +1348,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "added_at": account.added_at,
                 },
                 "quota": quota,
+                "activation": activation,
             },
         )
 

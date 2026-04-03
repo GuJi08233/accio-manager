@@ -25,6 +25,48 @@ def _usage_summary() -> dict[str, int]:
     }
 
 
+def _normalize_thinking_level(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"low", "medium", "high"}:
+        return normalized
+    return ""
+
+
+def _budget_to_thinking_level(value: Any) -> str:
+    try:
+        budget = int(value or 0)
+    except (TypeError, ValueError):
+        return "high"
+    if budget >= 12000:
+        return "high"
+    if budget >= 4000:
+        return "medium"
+    return "low"
+
+
+def _apply_thinking_config(request_body: dict[str, Any], body: dict[str, Any]) -> None:
+    thinking = body.get("thinking")
+    if not isinstance(thinking, dict):
+        return
+
+    thinking_type = str(thinking.get("type") or "").strip().lower()
+    if thinking_type not in {"enabled", "adaptive"}:
+        return
+
+    request_body["include_thoughts"] = True
+
+    level = _normalize_thinking_level(thinking.get("effort"))
+    if not level:
+        if thinking.get("budget_tokens") is not None:
+            level = _budget_to_thinking_level(thinking.get("budget_tokens"))
+        else:
+            level = "high"
+    request_body["thinking_level"] = level
+
+    if thinking_type == "enabled" and thinking.get("budget_tokens") is not None:
+        request_body["thinking_budget"] = thinking.get("budget_tokens")
+
+
 def build_models_payload() -> dict[str, object]:
     return {
         "object": "list",
@@ -80,12 +122,7 @@ def build_accio_request(
     if body.get("temperature") is not None:
         request_body["temperature"] = body.get("temperature")
 
-    thinking = body.get("thinking")
-    if isinstance(thinking, dict) and thinking.get("type") == "enabled":
-        request_body["include_thoughts"] = True
-        request_body["thinking_level"] = "high"
-        if thinking.get("budget_tokens") is not None:
-            request_body["thinking_budget"] = thinking.get("budget_tokens")
+    _apply_thinking_config(request_body, body)
 
     tools = body.get("tools")
     if isinstance(tools, list) and tools:
@@ -436,7 +473,7 @@ def decode_non_stream_response(
             if block_type == "text":
                 content.append({"type": "text", "text": ""})
             elif block_type == "thinking":
-                content.append({"type": "thinking", "thinking": ""})
+                content.append({"type": "thinking", "thinking": "", "signature": ""})
             elif block_type == "tool_use":
                 content.append(
                     {
@@ -459,6 +496,8 @@ def decode_non_stream_response(
                 last_block["thinking"] = str(last_block.get("thinking") or "") + str(
                     delta["thinking"]
                 )
+            if delta.get("signature") is not None:
+                last_block["signature"] = str(delta["signature"] or "")
             if delta.get("partial_json") is not None:
                 last_block["_input"] = str(last_block.get("_input") or "") + str(
                     delta["partial_json"]
@@ -475,6 +514,8 @@ def decode_non_stream_response(
                 last_block.pop("_input", None)
     for block in content:
         block.pop("_input", None)
+        if block.get("type") == "thinking" and not block.get("signature"):
+            block.pop("signature", None)
 
     return {
         "id": f"msg_{uuid.uuid4().hex}",

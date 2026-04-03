@@ -312,6 +312,7 @@
 
         const account = payload.account || {};
         const quota = payload.quota || {};
+        const activation = payload.activation || {};
         const resultGrid = document.getElementById('result-grid');
         resultGrid.innerHTML = [
           ['账号名', account.name || '-'],
@@ -319,7 +320,12 @@
           ['Access Token', account.accessToken || '-'],
           ['Token 过期', account.expiresAtText || '-'],
           ['保存时间', account.addedAt || '-'],
-          ['剩余额度', quota.remaining_text || '未知']
+          ['剩余额度', quota.remaining_text || '未知'],
+          ['激活结果', activation.message || '-'],
+          ['用户昵称', activation.userName || '-'],
+          ['Accio ID', activation.accioId || '-'],
+          ['邀请状态', activation.invitationGranted === undefined ? '-' : String(activation.invitationGranted)],
+          ['渠道授权数', Array.isArray(activation.channelAuthorizations) ? String(activation.channelAuthorizations.length) : '-']
         ].map(([label, value]) => `
           <div class="result-item">
             <div class="result-label">${escapeHtml(label)}</div>

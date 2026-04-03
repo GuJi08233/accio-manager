@@ -106,6 +106,46 @@
         <div class="label">保存时间</div>
         <div class="value">{{ account.added_at }}</div>
       </div>
+      <div class="item">
+        <div class="label">激活结果</div>
+        <div class="value">
+          {% if activation %}
+            {{ activation.message }}
+          {% else %}
+            未执行
+          {% endif %}
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">用户昵称</div>
+        <div class="value">
+          {% if activation %}
+            {{ activation.userName or "-" }}
+          {% else %}
+            -
+          {% endif %}
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">Accio ID</div>
+        <div class="value">
+          {% if activation %}
+            {{ activation.accioId or "-" }}
+          {% else %}
+            -
+          {% endif %}
+        </div>
+      </div>
+      <div class="item">
+        <div class="label">邀请状态</div>
+        <div class="value">
+          {% if activation and activation.invitationGranted is not none %}
+            {{ activation.invitationGranted }}
+          {% else %}
+            -
+          {% endif %}
+        </div>
+      </div>
     </div>
     {% endif %}
 

@@ -67,6 +67,7 @@ docker run -d \
 - 容器内服务监听 `0.0.0.0:4097`
 - 默认数据目录是 `/app/data`
 - 服务器部署时，建议使用 `/oauth` 页面处理登录，并在需要时手动粘贴完整回调 URL 导入账号
+- 新账号在回调导入后，会自动依次触发 `userinfo`、`invitation/query` 和 `channel/query` 完成激活
 
 ## GitHub Packages
 
@@ -119,6 +120,20 @@ curl http://127.0.0.1:4097/v1/messages \
   -H "x-api-key: admin" \
   -d "{\"model\":\"claude-sonnet-4-6\",\"max_tokens\":256,\"stream\":false,\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}]}"
 ```
+
+开启思考示例：
+
+```bash
+curl http://127.0.0.1:4097/v1/messages \
+  -H "content-type: application/json" \
+  -H "x-api-key: admin" \
+  -d "{\"model\":\"claude-sonnet-4-6\",\"max_tokens\":2048,\"stream\":false,\"thinking\":{\"type\":\"adaptive\",\"effort\":\"high\"},\"messages\":[{\"role\":\"user\",\"content\":\"请先思考再回答：2+2 为什么等于 4？\"}]}"
+```
+
+兼容说明：
+
+- 如果客户端仍发送旧格式 `thinking: {\"type\":\"enabled\",\"budget_tokens\":...}`，系统也会继续兼容
+- 非流式返回会保留 `thinking` 块；如果上游返回了 `signature`，也会一并透传
 
 ## 数据目录
 
