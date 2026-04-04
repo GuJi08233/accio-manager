@@ -17,7 +17,7 @@ def _env_flag(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class Settings:
-    version: str = os.getenv("ACCIO_VERSION", "0.5.3")
+    version: str = os.getenv("ACCIO_VERSION", "0.5.4")
     base_url: str = os.getenv("ACCIO_BASE_URL", "https://phoenix-gw.alibaba.com")
     callback_host: str = os.getenv("ACCIO_CALLBACK_HOST", "127.0.0.1")
     server_host: str = os.getenv(
