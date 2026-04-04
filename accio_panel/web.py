@@ -1127,7 +1127,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if a.last_remaining_quota is not None
         ]
         total_remaining_quota = (
-            round(sum(enabled_quota_values) / len(enabled_quota_values))
+            sum(enabled_quota_values)
             if enabled_quota_values
             else None
         )
