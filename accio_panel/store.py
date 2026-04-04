@@ -356,6 +356,55 @@ class AccountStore:
             self._write_account_unlocked(account)
             return account
 
+    def _is_abnormal_auto_disabled_unlocked(self, account: Account) -> bool:
+        if not account.auto_disabled:
+            return False
+        reason_text = str(account.auto_disabled_reason or "").strip()
+        if not reason_text:
+            return False
+
+        normalized_reason = reason_text.lower()
+        return (
+            "auth not pass" in normalized_reason
+            or "请手动处理" in reason_text
+        )
+
+    def list_abnormal_auto_disabled_accounts(self) -> list[Account]:
+        with self._lock:
+            return [
+                account
+                for account in self._read_all_unlocked()
+                if self._is_abnormal_auto_disabled_unlocked(account)
+            ]
+
+    def delete_abnormal_auto_disabled_accounts(self) -> dict[str, Any]:
+        with self._lock:
+            accounts = self._read_all_unlocked()
+            matched_accounts = [
+                account
+                for account in accounts
+                if self._is_abnormal_auto_disabled_unlocked(account)
+            ]
+            deleted_ids: list[str] = []
+            deleted_names: list[str] = []
+            failures: list[str] = []
+
+            for account in matched_accounts:
+                if self._delete_account_unlocked(account.id):
+                    deleted_ids.append(account.id)
+                    deleted_names.append(account.name)
+                    continue
+                failures.append(f"{account.name}: 删除失败")
+
+            return {
+                "processedCount": len(matched_accounts),
+                "deletedCount": len(deleted_ids),
+                "failureCount": len(failures),
+                "deletedIds": deleted_ids,
+                "deletedNames": deleted_names,
+                "failures": failures,
+            }
+
     def delete(self, account_id: str) -> bool:
         with self._lock:
             return self._delete_account_unlocked(account_id)

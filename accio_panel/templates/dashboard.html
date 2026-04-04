@@ -900,6 +900,7 @@
         <button class="action" type="button" onclick="runBatchAction('refresh_quota')">批量刷新额度</button>
         <button class="action" type="button" onclick="runBatchAction('enable')">批量启用</button>
         <button class="action" type="button" onclick="runBatchAction('disable')">批量禁用</button>
+        <button class="action danger" type="button" onclick="deleteAbnormalDisabled()">一键删除异常禁用</button>
         <button class="action danger" type="button" onclick="runBatchAction('delete', true)">批量删除</button>
       </div>
 
@@ -1100,6 +1101,31 @@
       } catch (error) {
         console.error(error);
         showToast('批量操作失败，请稍后重试');
+      }
+    }
+
+    async function deleteAbnormalDisabled() {
+      const confirmed = window.confirm('确认一键删除所有“异常自动禁用且需手动处理”的账号吗？该操作不可恢复。');
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/accounts/delete-abnormal-disabled', {
+          method: 'POST'
+        });
+        const payload = await response.json();
+        if (payload.failures && payload.failures.length) {
+          showToast(`${payload.message || '删除已完成'}，失败 ${payload.failures.length} 个`);
+        } else {
+          showToast(payload.message || '删除已完成');
+        }
+        if (payload.success || payload.processedCount) {
+          window.setTimeout(() => window.location.reload(), 500);
+        }
+      } catch (error) {
+        console.error(error);
+        showToast('一键删除异常禁用账号失败，请稍后重试');
       }
     }
 
