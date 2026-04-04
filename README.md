@@ -120,7 +120,6 @@ admin
 - 动态目录可用时，`/v1/messages`、`/v1/chat/completions`、`/v1/responses`、`/v1beta/models/{model}:generateContent` 的模型校验也按该目录执行
 - 动态目录暂不可用时，列表接口会回退到内置静态模型；实际请求会继续按传入模型名直传上游
 - 响应头 `x-accio-model-source` 会标记模型目录来源：`live`、`cache`、`stale` 或 `static-fallback`
-- `/v1/models` 只暴露文本兼容模型；Gemini 生图模型只放在 `/v1beta/models` 这组 Gemini 路径下
 - 模型名不会做别名改写，按请求值直接透传到上游
 - 默认调度策略是 `优先填充`
 - 优先填充支持账号级 `fillPriority`，数值越小越优先；同优先级下会优先调用剩余额度更少的账号
@@ -144,15 +143,6 @@ curl http://127.0.0.1:4097/v1beta/models/gemini-3.1-pro-preview:generateContent 
   -H "content-type: application/json" \
   -H "x-api-key: admin" \
   -d "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"你好\"}]}],\"generationConfig\":{\"maxOutputTokens\":1024}}"
-```
-
-Gemini 生图示例：
-
-```bash
-curl http://127.0.0.1:4097/v1beta/models/gemini-3-pro-image-preview:generateContent \
-  -H "content-type: application/json" \
-  -H "x-api-key: admin" \
-  -d "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"A realistic, crystal clear empty glass cup resting on a sleek wooden table\"}]}],\"generationConfig\":{\"responseModalities\":[\"TEXT\",\"IMAGE\"],\"imageConfig\":{\"aspectRatio\":\"1:1\",\"imageSize\":\"1K\"}}}"
 ```
 
 Gemini 流式示例：
