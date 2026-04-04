@@ -744,6 +744,7 @@ def build_accio_request_from_openai(
         "tenant": body.get("tenant"),
         "iai_tag": body.get("iai_tag", body.get("iaiTag")),
         "properties": normalized_properties,
+        "tool_choice": body.get("tool_choice"),
     }
     if system_text:
         anthropic_body["system"] = system_text

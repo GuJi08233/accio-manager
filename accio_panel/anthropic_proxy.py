@@ -98,6 +98,57 @@ def _guess_image_mime_type(value: str) -> str:
     return "image/png"
 
 
+def _normalize_tool_choice(value: Any) -> tuple[str, str]:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"none", "auto"}:
+            return normalized, ""
+        if normalized in {"any", "required"}:
+            return "required", ""
+        return "auto", ""
+
+    if not isinstance(value, dict):
+        return "auto", ""
+
+    choice_type = str(value.get("type") or "").strip().lower()
+    if choice_type in {"none", "auto"}:
+        return choice_type, ""
+    if choice_type in {"any", "required"}:
+        return "required", ""
+
+    function_payload = value.get("function")
+    if isinstance(function_payload, dict):
+        name = str(function_payload.get("name") or "").strip()
+        if name:
+            return "specific", name
+
+    name = str(value.get("name") or "").strip()
+    if choice_type in {"tool", "function"} and name:
+        return "specific", name
+    if name:
+        return "specific", name
+
+    return "auto", ""
+
+
+def _tool_choice_instruction(value: Any) -> str:
+    choice_type, tool_name = _normalize_tool_choice(value)
+    if choice_type == "none":
+        return "Tool usage requirement: do not call tools. Respond directly to the user."
+    if choice_type == "required":
+        return (
+            "Tool usage requirement: you must call one of the provided tools before "
+            "producing the final answer. Do not end the turn without either using a "
+            "tool or clearly explaining why no provided tool can satisfy the request."
+        )
+    if choice_type == "specific" and tool_name:
+        return (
+            f"Tool usage requirement: you must call the tool '{tool_name}' before "
+            "producing the final answer. Do not end the turn without attempting that tool."
+        )
+    return ""
+
+
 def build_models_payload() -> dict[str, object]:
     return {
         "object": "list",
@@ -163,8 +214,12 @@ def build_accio_request(
 
     system_value = body.get("system")
     system_text = _extract_system_text(system_value)
-    if system_text:
-        request_body["system_instruction"] = system_text
+    tool_choice_text = _tool_choice_instruction(body.get("tool_choice"))
+    combined_system_text = "\n\n".join(
+        text for text in (system_text, tool_choice_text) if text
+    )
+    if combined_system_text:
+        request_body["system_instruction"] = combined_system_text
 
     if body.get("temperature") is not None:
         request_body["temperature"] = body.get("temperature")
