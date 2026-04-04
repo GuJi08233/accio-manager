@@ -1,21 +1,22 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any
 
 from fastapi.responses import JSONResponse
 
 from . import web as web_module
+from .config import Settings
 from .store import AccountStore
 
 
 ROUTE_PATH = "/api/accounts/delete-abnormal-disabled"
 
 
-def _find_account_store() -> AccountStore:
-    for value in vars(web_module).values():
-        if isinstance(value, AccountStore):
-            return value
-    raise RuntimeError("未找到 AccountStore 实例")
+@lru_cache(maxsize=1)
+def _get_account_store() -> AccountStore:
+    settings = Settings()
+    return AccountStore(settings.accounts_dir, settings.accounts_file)
 
 
 def _route_exists() -> bool:
@@ -50,7 +51,7 @@ def register_routes() -> None:
 
     @app.post(ROUTE_PATH)
     def delete_abnormal_auto_disabled_accounts() -> JSONResponse:
-        store = _find_account_store()
+        store = _get_account_store()
         payload = store.delete_abnormal_auto_disabled_accounts()
         deleted_count = int(payload.get("deletedCount") or 0)
         failure_count = int(payload.get("failureCount") or 0)
