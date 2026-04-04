@@ -3293,8 +3293,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
         )
 
-    @application.get("/api/accounts/{account_id}/switch")
-    def account_switch(request: Request, account_id: str) -> RedirectResponse | JSONResponse:
+    @application.get("/api/accounts/{account_id}/switch", response_model=None)
+    def account_switch(request: Request, account_id: str):
         if not _is_admin_authenticated(request):
             return _unauthorized_json()
 
