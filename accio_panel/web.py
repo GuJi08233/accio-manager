@@ -325,6 +325,8 @@ def _query_llm_config_with_refresh_fallback(
 def _load_dynamic_model_catalog(
     application: FastAPI,
     panel_settings: PanelSettings,
+    *,
+    allow_refresh: bool = True,
 ) -> tuple[list[dict[str, Any]], str]:
     cache = getattr(application.state, "model_catalog_cache", None)
     if not isinstance(cache, dict):
@@ -335,6 +337,10 @@ def _load_dynamic_model_catalog(
     cached_entries = cache.get("entries")
     if isinstance(cached_entries, list) and cached_entries and float(cache.get("expiresAt") or 0) > now_value:
         return list(cached_entries), "cache"
+    if not allow_refresh:
+        if isinstance(cached_entries, list) and cached_entries:
+            return list(cached_entries), "stale"
+        return [], "unavailable"
 
     store: AccountStore = application.state.store
     client: AccioClient = application.state.client
@@ -1040,6 +1046,7 @@ def _apply_quota_result(
     now_ts = _now_timestamp()
     should_mark_updated = False
 
+    account.last_quota_view = dict(quota)
     if quota["success"]:
         account.last_remaining_quota = quota["remaining_value"]
         if (
@@ -1079,56 +1086,46 @@ def _apply_quota_result(
     return account, quota
 
 
-def _build_dashboard_items(
-    accounts: list[Account],
-    client: AccioClient,
-    store: AccountStore,
-    panel_settings: PanelSettings,
-) -> list[dict[str, Any]]:
+def _cached_quota_view(account: Account) -> dict[str, Any]:
+    cached_quota = account.last_quota_view if isinstance(account.last_quota_view, dict) else {}
+    if cached_quota:
+        return dict(cached_quota)
+
+    if account.last_remaining_quota is not None:
+        remaining_value = max(0, _as_int(account.last_remaining_quota))
+        return {
+            "success": True,
+            "total_value": 0,
+            "used_value": 0,
+            "used_text": "-",
+            "remaining_value": remaining_value,
+            "remaining_ratio": 0,
+            "remaining_text": str(remaining_value),
+            "reset_text": "-",
+            "level": "low" if remaining_value > 0 else "high",
+            "message": "显示最近一次缓存额度结果",
+        }
+
+    return {
+        "success": False,
+        "total_value": 0,
+        "used_value": 0,
+        "used_text": "-",
+        "remaining_value": 0,
+        "remaining_ratio": 0,
+        "remaining_text": "待后台刷新",
+        "reset_text": "-",
+        "level": "error",
+        "message": "面板已改为优先显示本地缓存额度，等待后台调度刷新。",
+    }
+
+
+def _build_dashboard_items(accounts: list[Account]) -> list[dict[str, Any]]:
     if not accounts:
         return []
 
-    quota_map: dict[str, tuple[Account, dict[str, Any]]] = {}
-    workers = min(8, len(accounts))
-
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        future_map = {
-            executor.submit(
-                _query_quota_with_refresh_fallback,
-                store,
-                client,
-                account,
-                panel_settings,
-            ): account.id
-            for account in accounts
-        }
-        for future in as_completed(future_map):
-            account_id = future_map[future]
-            try:
-                quota_map[account_id] = future.result()
-            except Exception as exc:  # pragma: no cover
-                fallback_account = store.get_account(account_id)
-                if fallback_account is None:
-                    fallback_account = next(
-                        (candidate for candidate in accounts if candidate.id == account_id),
-                        None,
-                    )
-                if fallback_account is None:
-                    continue
-                quota_map[account_id] = (
-                    fallback_account,
-                    _build_quota_view({"success": False, "message": str(exc)}),
-                )
-
     items: list[dict[str, Any]] = []
     for account in accounts:
-        account, quota_view = quota_map.get(
-            account.id,
-            (
-                account,
-                _build_quota_view({"success": False, "message": "额度查询失败"}),
-            ),
-        )
         status = _account_status_view(account)
         items.append(
             {
@@ -1145,7 +1142,7 @@ def _build_dashboard_items(
                 "next_quota_check_at": account.next_quota_check_at,
                 "next_quota_check_reason": account.next_quota_check_reason,
                 "status": status,
-                "quota": quota_view,
+                "quota": _cached_quota_view(account),
             }
         )
     return items
@@ -1306,17 +1303,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         model_catalog, model_catalog_source = _load_dynamic_model_catalog(
             application,
             panel_settings,
+            allow_refresh=False,
         )
         stats_snapshot = usage_stats_store.snapshot(
             {account.id: account.name for account in all_accounts}
         )
         api_logs = api_log_store.recent(200) if current_view == "logs" else []
-        dashboard_items = _build_dashboard_items(
-            page_accounts,
-            client,
-            store,
-            panel_settings,
-        )
+        dashboard_items = _build_dashboard_items(page_accounts)
         api_base_url = _request_base_url(request, settings)
         return TEMPLATES.TemplateResponse(
             request=request,

@@ -59,6 +59,12 @@ def normalize_disabled_models(value: Any) -> dict[str, str]:
     return {}
 
 
+def normalize_quota_view(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return dict(value)
+
+
 @dataclass(slots=True)
 class Account:
     id: str
@@ -74,6 +80,7 @@ class Account:
     auto_disabled_reason: str | None = None
     last_quota_check_at: int | None = None
     last_remaining_quota: int | None = None
+    last_quota_view: dict[str, Any] = field(default_factory=dict)
     next_quota_check_at: int | None = None
     next_quota_check_reason: str | None = None
     disabled_models: dict[str, str] = field(default_factory=dict)
@@ -96,6 +103,7 @@ class Account:
             auto_disabled_reason=data.get("autoDisabledReason"),
             last_quota_check_at=normalize_timestamp(data.get("lastQuotaCheckAt")),
             last_remaining_quota=data.get("lastRemainingQuota"),
+            last_quota_view=normalize_quota_view(data.get("lastQuotaView")),
             next_quota_check_at=normalize_timestamp(data.get("nextQuotaCheckAt")),
             next_quota_check_reason=data.get("nextQuotaCheckReason"),
             disabled_models=normalize_disabled_models(
@@ -120,6 +128,7 @@ class Account:
             "autoDisabledReason": self.auto_disabled_reason,
             "lastQuotaCheckAt": self.last_quota_check_at,
             "lastRemainingQuota": self.last_remaining_quota,
+            "lastQuotaView": self.last_quota_view,
             "nextQuotaCheckAt": self.next_quota_check_at,
             "nextQuotaCheckReason": self.next_quota_check_reason,
             "disabledModels": self.disabled_models,
