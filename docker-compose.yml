@@ -1,0 +1,14 @@
+services:
+  accio-panel:
+    image: ghcr.io/guji08233/accio-manager:latest
+    container_name: accio-panel
+    ports:
+      - "4097:4097"
+    volumes:
+      - accio-panel-data:/app/data
+    environment:
+      - ACCIO_CALLBACK_HOST=127.0.0.1
+    restart: unless-stopped
+
+volumes:
+  accio-panel-data:
