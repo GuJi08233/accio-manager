@@ -16,19 +16,25 @@ SUPPORTED_ANTHROPIC_MODELS = (
 )
 SUPPORTED_ANTHROPIC_MODELS_SET = set(SUPPORTED_ANTHROPIC_MODELS)
 SUPPORTED_GEMINI_MODELS = (
-    "gemini-3-flash-preview",
     "gemini-3.1-pro-preview",
-    "gemini-3-pro-preview",
 )
-SUPPORTED_PROXY_MODELS = SUPPORTED_ANTHROPIC_MODELS + SUPPORTED_GEMINI_MODELS
+SUPPORTED_OPENAI_MODELS = (
+    "gpt-5.4",
+    "gpt-5.2",
+    "qwen-3.6-plus",
+    "qwen-3-max",
+)
+SUPPORTED_PROXY_MODELS = SUPPORTED_ANTHROPIC_MODELS + SUPPORTED_GEMINI_MODELS + SUPPORTED_OPENAI_MODELS
 SUPPORTED_PROXY_MODELS_SET = set(SUPPORTED_PROXY_MODELS)
 DEFAULT_ANTHROPIC_MODEL = SUPPORTED_ANTHROPIC_MODELS[0]
 MODEL_OWNERS = {
     "claude-sonnet-4-6": "anthropic",
     "claude-opus-4-6": "anthropic",
-    "gemini-3-flash-preview": "google",
     "gemini-3.1-pro-preview": "google",
-    "gemini-3-pro-preview": "google",
+    "gpt-5.4": "openai",
+    "gpt-5.2": "openai",
+    "qwen-3.6-plus": "alibaba",
+    "qwen-3-max": "alibaba",
 }
 
 
