@@ -11,6 +11,7 @@ import requests
 
 SUPPORTED_GEMINI_TEXT_MODELS = (
     "gemini-3-flash-preview",
+    "gemini-3.1-flash-preview",
     "gemini-3.1-pro-preview",
     "gemini-3-pro-preview",
 )
@@ -28,6 +29,11 @@ DEFAULT_GEMINI_MODEL = SUPPORTED_GEMINI_TEXT_MODELS[0]
 GEMINI_MODEL_METADATA = {
     "gemini-3-flash-preview": {
         "display_name": "Gemini 3 Flash",
+        "input_limit": 1_000_000,
+        "output_limit": 16_384,
+    },
+    "gemini-3.1-flash-preview": {
+        "display_name": "Gemini 3.1 Flash",
         "input_limit": 1_000_000,
         "output_limit": 16_384,
     },
