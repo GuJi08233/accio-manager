@@ -17,6 +17,7 @@ SUPPORTED_ANTHROPIC_MODELS = (
 SUPPORTED_ANTHROPIC_MODELS_SET = set(SUPPORTED_ANTHROPIC_MODELS)
 SUPPORTED_GEMINI_MODELS = (
     "gemini-3-flash-preview",
+    "gemini-3.1-flash-preview",
     "gemini-3.1-pro-preview",
     "gemini-3-pro-preview",
 )
@@ -27,6 +28,7 @@ MODEL_OWNERS = {
     "claude-sonnet-4-6": "anthropic",
     "claude-opus-4-6": "anthropic",
     "gemini-3-flash-preview": "google",
+    "gemini-3.1-flash-preview": "google",
     "gemini-3.1-pro-preview": "google",
     "gemini-3-pro-preview": "google",
 }
