@@ -1539,6 +1539,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         accio_body = build_accio_request_from_gemini(
             payload,
             model=normalized_model_name,
+            token=account.access_token,
         )
         request_id = str(accio_body.get("request_id") or "")
 
@@ -2054,6 +2055,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         accio_body = build_accio_request_from_gemini(
             payload,
             model=model_name,
+            token=account.access_token,
         )
         request_id = str(accio_body.get("request_id") or "")
 
@@ -2329,7 +2331,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 code="proxy_selection_failed",
             )
 
-        accio_body = build_accio_request_from_openai(chat_payload)
+        accio_body = build_accio_request_from_openai(chat_payload, token=account.access_token)
         request_id = str(accio_body.get("request_id") or "")
 
         try:
@@ -2670,7 +2672,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 code="proxy_selection_failed",
             )
 
-        accio_body = build_accio_request_from_openai(payload)
+        accio_body = build_accio_request_from_openai(payload, token=account.access_token)
         request_id = str(accio_body.get("request_id") or "")
 
         try:
@@ -3012,7 +3014,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             return _anthropic_error_response(exc.status_code, exc.message)
 
-        accio_body = build_accio_request(payload)
+        accio_body = build_accio_request(payload, token=account.access_token)
         request_id = str(accio_body.get("request_id") or "")
 
         try:

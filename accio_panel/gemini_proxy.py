@@ -322,16 +322,14 @@ def build_accio_request_from_gemini(
     body: dict[str, Any],
     *,
     model: str,
+    token: str = "",
 ) -> dict[str, Any]:
     generation_config = body.get("generationConfig", body.get("generation_config"))
     if not isinstance(generation_config, dict):
         generation_config = {}
 
     request_body: dict[str, Any] = {
-        "empid": str(body.get("empid") or ""),
-        "tenant": str(body.get("tenant") or ""),
-        "iai_tag": str(body.get("iai_tag", body.get("iaiTag")) or ""),
-        "stream": True,
+        "token": token or str(body.get("token") or ""),
         "model": model,
         "request_id": str(
             body.get("request_id")
@@ -339,7 +337,6 @@ def build_accio_request_from_gemini(
             or f"user-{int(time.time() * 1000)}"
         ),
         "message_id": str(body.get("message_id", body.get("messageId")) or ""),
-        "incremental": True,
         "max_output_tokens": _as_int(
             generation_config.get(
                 "maxOutputTokens",
