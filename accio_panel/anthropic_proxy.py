@@ -177,10 +177,6 @@ def build_accio_request(
             {
                 "name": str(tool.get("name") or ""),
                 "description": str(tool.get("description") or ""),
-                "parametersJson": json.dumps(
-                    tool.get("input_schema") or {},
-                    ensure_ascii=False,
-                ),
                 "parameters_json": json.dumps(
                     tool.get("input_schema") or {},
                     ensure_ascii=False,

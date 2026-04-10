@@ -281,7 +281,6 @@ def _normalize_tools(value: Any) -> list[dict[str, Any]]:
                 {
                     "name": str(item.get("name") or ""),
                     "description": str(item.get("description") or ""),
-                    "parametersJson": _stringify_json(parameters_value),
                     "parameters_json": _stringify_json(parameters_value),
                 }
             )
@@ -301,7 +300,6 @@ def _normalize_tools(value: Any) -> list[dict[str, Any]]:
                 {
                     "name": str(declaration.get("name") or ""),
                     "description": str(declaration.get("description") or ""),
-                    "parametersJson": _stringify_json(schema),
                     "parameters_json": _stringify_json(schema),
                 }
             )
