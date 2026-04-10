@@ -140,7 +140,11 @@ def build_accio_request(
             or body.get("requestId")
             or f"user-{int(time.time() * 1000)}"
         ),
-        "message_id": str(body.get("message_id", body.get("messageId")) or ""),
+        "message_id": str(
+            body.get("message_id")
+            or body.get("messageId")
+            or f"AI_AccioWork_{uuid.uuid4().hex}_{int(time.time() * 1000)}"
+        ),
         "max_output_tokens": body.get("max_tokens") or 8192,
         "contents": [],
         "stop_sequences": _normalize_stop_sequences(
@@ -177,6 +181,10 @@ def build_accio_request(
                     tool.get("input_schema") or {},
                     ensure_ascii=False,
                 ),
+                "parameters_json": json.dumps(
+                    tool.get("input_schema") or {},
+                    ensure_ascii=False,
+                ),
             }
             for tool in tools
             if isinstance(tool, dict) and tool.get("name")
@@ -184,6 +192,11 @@ def build_accio_request(
 
     contents = convert_messages(body.get("messages") or [])
     request_body["contents"] = ensure_alternating_roles(contents)
+
+    for passthrough_key in ("session_key", "conversation_id", "conversation_name"):
+        if body.get(passthrough_key) is not None:
+            request_body[passthrough_key] = body.get(passthrough_key)
+
     return request_body
 
 

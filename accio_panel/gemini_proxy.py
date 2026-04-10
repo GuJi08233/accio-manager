@@ -336,7 +336,11 @@ def build_accio_request_from_gemini(
             or body.get("requestId")
             or f"user-{int(time.time() * 1000)}"
         ),
-        "message_id": str(body.get("message_id", body.get("messageId")) or ""),
+        "message_id": str(
+            body.get("message_id")
+            or body.get("messageId")
+            or f"AI_AccioWork_{uuid.uuid4().hex}_{int(time.time() * 1000)}"
+        ),
         "max_output_tokens": _as_int(
             generation_config.get(
                 "maxOutputTokens",
@@ -407,7 +411,7 @@ def build_accio_request_from_gemini(
         properties_payload = request_body.setdefault("properties", {})
         properties_payload["tool_config"] = _stringify_json(tool_config)
 
-    for passthrough_key in ("message_id", "session_key", "conversation_id"):
+    for passthrough_key in ("message_id", "session_key", "conversation_id", "conversation_name"):
         if body.get(passthrough_key) is not None:
             request_body[passthrough_key] = body.get(passthrough_key)
 
